@@ -115,6 +115,8 @@ endif()
 set(WARNINGS)
 set(ANDROID_STL_FLAGS)
 
+add_definitions(-DBOOST_ALL_DYN_LINK)
+
 # Platform (not compiler) specific settings
 if(IOS)
   # The cxx_flags must be reset here, because the ios-cmake toolchain file unfortunately sets "-headerpad_max_install_names" which is not a valid clang flag.
@@ -208,7 +210,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "MSVC")
   set(CMAKE_CXX_FLAGS_MINSIZEREL "${CMAKE_CXX_FLAGS_MINSIZEREL} /MP")
   set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} /MP")
   set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "${CMAKE_CXX_FLAGS_RELWITHDEBINFO} /MP")
-  
+
   if (WINDOWS_STORE OR WINDOWS_PHONE)
     add_compile_options(/ZW)
   endif()
