@@ -41,7 +41,11 @@ function(cpprest_find_openssl)
       # This should prevent linking against the system provided 0.9.8y
       set(_OPENSSL_VERSION "")
     endif()
-    find_package(OpenSSL 1.0.0 REQUIRED)
+    # Montavista environment only ships libssl 0.9.7.
+    # Relax this check so we can build for that platform. 
+    # This (ab)use is OK since that platform will never actually use this package
+    # and it's only included to avoid issues with missing symbols. 
+    find_package(OpenSSL 0.9.0 REQUIRED)
 
     INCLUDE(CheckCXXSourceCompiles)
     set(CMAKE_REQUIRED_INCLUDES "${OPENSSL_INCLUDE_DIR}")
