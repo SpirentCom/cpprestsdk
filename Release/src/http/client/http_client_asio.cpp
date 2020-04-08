@@ -280,7 +280,11 @@ public:
         // Check to set host name for Server Name Indication (SNI)
         if (config.is_tlsext_sni_enabled())
         {
+// Our mvl40 environment has an ancient version of openssl. So ancient that this function doesn't exist.
+// Since this library will never do anything on that platform, just ignore it.
+#ifndef SPIRENT_MVL40_COMPATIBILITY
             SSL_set_tlsext_host_name(m_ssl_stream->native_handle(), &m_cn_hostname[0]);
+#endif
         }
 
         m_ssl_stream->async_handshake(type, handshake_handler);
