@@ -28,10 +28,18 @@ static void verify_uri(const uri& uri)
 {
     // Some things like proper URI schema are verified by the URI class.
     // We only need to check certain things specific to HTTP.
-    if (uri.scheme() != _XPLATSTR("http") && uri.scheme() != _XPLATSTR("https"))
+    if (uri.scheme() != _XPLATSTR("http") && uri.scheme() != _XPLATSTR("https")
+#if defined(_WIN32)
+       )
     {
         throw std::invalid_argument("URI scheme must be 'http' or 'https'");
     }
+#else
+        && uri.scheme() != _XPLATSTR("http+unix"))
+    {
+        throw std::invalid_argument("URI scheme must be 'http', 'https', or 'http+unix'");
+    }
+#endif
 
     if (uri.host().empty())
     {

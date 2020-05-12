@@ -76,6 +76,7 @@
 #endif
 
 using boost::asio::ip::tcp;
+using boost::asio::local::stream_protocol;
 
 #ifdef __ANDROID__
 using utility::conversions::details::to_string;
@@ -146,15 +147,24 @@ class asio_connection
     friend class asio_client;
 
 public:
-    asio_connection(boost::asio::io_service& io_service)
+    asio_connection(boost::asio::io_service& io_service, bool is_local)
         : m_socket_lock()
-        , m_socket(io_service)
+        , m_tcp_socket()
+        , m_local_socket()
         , m_ssl_stream()
         , m_cn_hostname()
         , m_is_reused(false)
         , m_keep_alive(true)
         , m_closed(false)
     {
+        if (is_local)
+        {
+            m_local_socket = utility::details::make_unique<stream_protocol::socket>(io_service);
+        }
+        else
+        {
+            m_tcp_socket = utility::details::make_unique<boost::asio::ip::tcp::socket>(io_service);
+        }
     }
 
     ~asio_connection() { close(); }
@@ -165,6 +175,7 @@ public:
     {
         std::lock_guard<std::mutex> lock(m_socket_lock);
         assert(!is_ssl());
+        assert(m_tcp_socket);
         boost::asio::ssl::context ssl_context(boost::asio::ssl::context::sslv23);
         ssl_context.set_default_verify_paths();
         ssl_context.set_options(boost::asio::ssl::context::default_workarounds);
@@ -173,7 +184,7 @@ public:
             ssl_context_callback(ssl_context);
         }
         m_ssl_stream = utility::details::make_unique<boost::asio::ssl::stream<boost::asio::ip::tcp::socket&>>(
-            m_socket, ssl_context);
+            *m_tcp_socket, ssl_context);
         m_cn_hostname = std::move(cn_hostname);
     }
 
@@ -186,15 +197,32 @@ public:
         m_closed = true;
 
         boost::system::error_code error;
-        m_socket.shutdown(tcp::socket::shutdown_both, error);
-        m_socket.close(error);
+        if (is_local())
+        {
+            m_local_socket->shutdown(stream_protocol::socket::shutdown_both, error);
+            m_local_socket->close(error);
+        }
+        else
+        {
+            assert(m_tcp_socket);
+            m_tcp_socket->shutdown(tcp::socket::shutdown_both, error);
+            m_tcp_socket->close(error);
+        }
     }
 
     boost::system::error_code cancel()
     {
         std::lock_guard<std::mutex> lock(m_socket_lock);
         boost::system::error_code error;
-        m_socket.cancel(error);
+        if (is_local())
+        {
+            m_local_socket->cancel(error);
+        }
+        else
+        {
+            assert(m_tcp_socket);
+            m_tcp_socket->cancel(error);
+        }
         return error;
     }
 
@@ -202,6 +230,7 @@ public:
     void set_keep_alive(bool keep_alive) { m_keep_alive = keep_alive; }
     bool keep_alive() const { return m_keep_alive; }
     bool is_ssl() const { return m_ssl_stream ? true : false; }
+    bool is_local() const { return m_local_socket ? true : false; }
     const std::string& cn_hostname() const { return m_cn_hostname; }
 
     // Check if the error code indicates that the connection was closed by the
@@ -243,13 +272,30 @@ public:
     }
 
     template<typename Iterator, typename Handler>
+    void async_local_connect(const Iterator& begin, const Handler& handler)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_socket_lock);
+            if (!m_closed)
+            {
+                assert(m_local_socket);
+                m_local_socket->async_connect(begin, handler);
+                return;
+            }
+        } // unlock
+
+        handler(boost::asio::error::operation_aborted);
+    }
+
+    template<typename Iterator, typename Handler>
     void async_connect(const Iterator& begin, const Handler& handler)
     {
         {
             std::lock_guard<std::mutex> lock(m_socket_lock);
             if (!m_closed)
             {
-                m_socket.async_connect(begin, handler);
+                assert(m_tcp_socket);
+                m_tcp_socket->async_connect(begin, handler);
                 return;
             }
         } // unlock
@@ -298,9 +344,13 @@ public:
         {
             boost::asio::async_write(*m_ssl_stream, buffer, writeHandler);
         }
-        else
+        else if (m_tcp_socket)
         {
-            boost::asio::async_write(m_socket, buffer, writeHandler);
+            boost::asio::async_write(*m_tcp_socket, buffer, writeHandler);
+        }
+        else if (m_local_socket)
+        {
+            boost::asio::async_write(*m_local_socket, buffer, writeHandler);
         }
     }
 
@@ -312,9 +362,13 @@ public:
         {
             boost::asio::async_read(*m_ssl_stream, buffer, condition, readHandler);
         }
-        else
+        else if (m_tcp_socket)
         {
-            boost::asio::async_read(m_socket, buffer, condition, readHandler);
+            boost::asio::async_read(*m_tcp_socket, buffer, condition, readHandler);
+        }
+        else if (m_local_socket)
+        {
+            boost::asio::async_read(*m_local_socket, buffer, condition, readHandler);
         }
     }
 
@@ -326,9 +380,13 @@ public:
         {
             boost::asio::async_read_until(*m_ssl_stream, buffer, delim, readHandler);
         }
-        else
+        else if (m_tcp_socket)
         {
-            boost::asio::async_read_until(m_socket, buffer, delim, readHandler);
+            boost::asio::async_read_until(*m_tcp_socket, buffer, delim, readHandler);
+        }
+        else if (m_local_socket)
+        {
+            boost::asio::async_read_until(*m_local_socket, buffer, delim, readHandler);
         }
     }
 
@@ -336,8 +394,11 @@ public:
 
     void enable_no_delay()
     {
-        boost::asio::ip::tcp::no_delay option(true);
-        m_socket.set_option(option);
+        if (m_tcp_socket)
+        {
+            boost::asio::ip::tcp::no_delay option(true);
+            m_tcp_socket->set_option(option);
+        }
     }
 
 private:
@@ -345,7 +406,8 @@ private:
     // because timeouts and cancellation can touch the socket at the same time
     // as normal message processing.
     std::mutex m_socket_lock;
-    tcp::socket m_socket;
+    std::unique_ptr<tcp::socket> m_tcp_socket;
+    std::unique_ptr<stream_protocol::socket> m_local_socket;
     std::unique_ptr<boost::asio::ssl::stream<tcp::socket&>> m_ssl_stream;
     std::string m_cn_hostname;
 
@@ -493,7 +555,7 @@ public:
         if (conn == nullptr)
         {
             // Pool was empty. Create a new connection
-            conn = std::make_shared<asio_connection>(crossplat::threadpool::shared_instance().service());
+            conn = std::make_shared<asio_connection>(crossplat::threadpool::shared_instance().service(), base_uri().scheme() == U("http+unix"));
             if (base_uri().scheme() == U("https") && !this->client_config().proxy().is_specified())
             {
                 conn->upgrade_to_ssl(std::move(cn_host), this->client_config().get_ssl_context_callback());
@@ -879,9 +941,19 @@ public:
                 // request directly. In both cases we have already established a tcp connection.
                 ctx->write_request();
             }
+            else if (ctx->m_connection->is_local())
+            {
+                // If the local connection is new, connect
+                auto unix_path = uri::decode(base_uri.host());
+                auto endpoint = stream_protocol::endpoint(unix_path);
+                ctx->m_connection->async_local_connect(
+                    endpoint,
+                    boost::bind(
+                        &asio_context::handle_local_connect, ctx, boost::asio::placeholders::error));
+            }
             else
             {
-                // If the connection is new (unresolved and unconnected socket), then start async
+                // If the TCP connection is new (unresolved and unconnected socket), then start async
                 // call to resolve first, leading eventually to request write.
 
                 // For normal http proxies, we want to connect directly to the proxy server. It will relay our request.
@@ -1007,6 +1079,24 @@ private:
             }
         }
         request_context::report_error(errorcodeValue, message);
+    }
+
+    void handle_local_connect(const boost::system::error_code& ec)
+    {
+        m_timer.reset();
+        if (!ec)
+        {
+            write_request();
+        }
+        else if (ec.value() == boost::system::errc::operation_canceled ||
+                 ec.value() == boost::asio::error::operation_aborted)
+        {
+            report_error("Request canceled by user.", ec, httpclient_errorcode_context::connect);
+        }
+        else
+        {
+            report_error("Failed to connect.", ec, httpclient_errorcode_context::connect);
+        }
     }
 
     void handle_connect(const boost::system::error_code& ec, tcp::resolver::iterator endpoints)
@@ -1966,10 +2056,15 @@ void asio_client::send_request(const std::shared_ptr<request_context>& request_c
         {
             client_config().invoke_nativehandle_options(ctx->m_connection->m_ssl_stream.get());
         }
+        else if (ctx->m_connection->is_local())
+        {
+            client_config().invoke_nativehandle_options(ctx->m_connection->m_local_socket.get());
+        }
         else
         {
-            client_config().invoke_nativehandle_options(&(ctx->m_connection->m_socket));
+            client_config().invoke_nativehandle_options(ctx->m_connection->m_tcp_socket.get());
         }
+
     }
     catch (...)
     {
