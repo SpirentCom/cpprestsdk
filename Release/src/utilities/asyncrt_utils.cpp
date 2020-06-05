@@ -705,8 +705,8 @@ datetime __cdecl datetime::utc_now()
     struct timeval time;
     gettimeofday(&time, nullptr);
     int64_t result = NtToUnixOffsetSeconds + time.tv_sec;
-    result *= _secondTicks;      // convert to 10e-7
-    result += time.tv_usec * 10; // convert and add microseconds, 10e-6 to 10e-7
+    result *= _secondTicks;      // convert to 1e-9
+    result += time.tv_usec * 1000; // convert and add microseconds, 1e-6 to 1e-9
     return datetime(static_cast<interval_type>(result));
 #endif
 }
@@ -744,11 +744,6 @@ static compute_year_result compute_year(int64_t secondsSince1900)
 
 utility::string_t datetime::to_string(date_format format) const
 {
-    if (m_interval > INT64_C(2650467743990000000))
-    {
-        throw std::out_of_range("The requested year exceeds the year 9999.");
-    }
-
     const int64_t epochAdjusted = static_cast<int64_t>(m_interval) - NtTo1900OffsetInterval;
     const int64_t secondsSince1900 = epochAdjusted / _secondTicks; // convert to seconds
     const int fracSec = static_cast<int>(epochAdjusted % _secondTicks);
@@ -772,8 +767,8 @@ utility::string_t datetime::to_string(date_format format) const
     const auto monthDay = yearDay - monthTable[month] + 1;
     const auto weekday = static_cast<int>((secondsSince1900 / SecondsInDay + 1) % 7);
 
-    char outBuffer[38]; // Thu, 01 Jan 1970 00:00:00 GMT\0
-                        // 1970-01-01T00:00:00.1234567Z\0
+    char outBuffer[40]; // Thu, 01 Jan 1970 00:00:00 GMT\0
+                        // 1970-01-01T00:00:00.123456789Z\0
     char* outCursor = outBuffer;
     switch (format)
     {
@@ -822,12 +817,12 @@ utility::string_t datetime::to_string(date_format format) const
             outCursor += 19;
             if (fracSec != 0)
             {
-                // Append fractional second, which is a 7-digit value with no trailing zeros
-                // This way, '1200' becomes '00012'
+                // Append fractional second, which is a 9-digit value with no trailing zeros
+                // This way, '120000' becomes '00012'
 #ifdef _MSC_VER
-                size_t appended = sprintf_s(outCursor, 9, ".%07d", fracSec);
+                size_t appended = sprintf_s(outCursor, 11, ".%09d", fracSec);
 #else  // ^^^ _MSC_VER // !_MSC_VER vvv
-                size_t appended = sprintf(outCursor, ".%07d", fracSec);
+                size_t appended = sprintf(outCursor, ".%09d", fracSec);
 #endif // _MSC_VER
                 while (outCursor[appended - 1] == '0')
                 {
@@ -1290,7 +1285,7 @@ datetime __cdecl datetime::from_string(const utility::string_t& dateString, date
         if (str[0] == _XPLATSTR('.') && ascii_isdigit(str[1]))
         {
             ++str;
-            int digits = 7;
+            int digits = 9;
             for (;;)
             {
                 fracSec *= 10;

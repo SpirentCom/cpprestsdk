@@ -652,7 +652,7 @@ public:
 private:
     friend int operator-(datetime t1, datetime t2);
 
-    static const interval_type _msTicks = static_cast<interval_type>(10000);
+    static const interval_type _msTicks = static_cast<interval_type>(1000000);
     static const interval_type _secondTicks = 1000 * _msTicks;
     static const interval_type _minuteTicks = 60 * _secondTicks;
     static const interval_type _hourTicks = 60 * 60 * _secondTicks;
@@ -661,7 +661,7 @@ private:
     // Private constructor. Use static methods to create an instance.
     datetime(interval_type interval) : m_interval(interval) {}
 
-    // Storing as hundreds of nanoseconds 10e-7, i.e. 1 here equals 100ns.
+    // Storing as nanoseconds 1e-9, i.e. 100 here equals 100ns.
     interval_type m_interval;
 };
 
@@ -670,7 +670,7 @@ inline int operator-(datetime t1, datetime t2)
     auto diff = (t1.m_interval - t2.m_interval);
 
     // Round it down to seconds
-    diff /= 10 * 1000 * 1000;
+    diff /= 1000 * 1000 * 1000;
 
     return static_cast<int>(diff);
 }
